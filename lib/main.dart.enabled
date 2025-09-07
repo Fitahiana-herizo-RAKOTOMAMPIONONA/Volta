@@ -1,0 +1,771 @@
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:syncfusion_flutter_gauges/gauges.dart';
+
+void main() {
+  runApp(const VoltaApp());
+}
+
+class VoltaApp extends StatelessWidget {
+  const VoltaApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Volta - Test de Puissance',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0066FF),
+          brightness: Brightness.light,
+          primary: const Color(0xFF0066FF),
+          secondary: const Color(0xFFFF8A00),
+        ),
+        fontFamily: 'Inter',
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0066FF),
+          brightness: Brightness.dark,
+          primary: const Color(0xFF0066FF),
+          secondary: const Color(0xFFFF8A00),
+        ),
+        fontFamily: 'Inter',
+      ),
+      home: const PowerMonitorPage(),
+    );
+  }
+}
+
+class PowerMeasurement {
+  final double voltage;
+  final double current;
+  final double power;
+  final DateTime timestamp;
+
+  PowerMeasurement({
+    required this.voltage,
+    required this.current,
+    required this.power,
+    required this.timestamp,
+  });
+}
+
+class PowerMonitorPage extends StatefulWidget {
+  const PowerMonitorPage({super.key});
+
+  @override
+  State<PowerMonitorPage> createState() => _PowerMonitorPageState();
+}
+
+class _PowerMonitorPageState extends State<PowerMonitorPage>
+    with TickerProviderStateMixin {
+  static const MethodChannel _channel = MethodChannel('volta/battery_info');
+
+  double voltage = 0.0;
+  double current = 0.0;
+  double power = 0.0;
+  bool isCharging = false;
+  bool isMonitoring = false;
+  
+  Timer? timer;
+  List<PowerMeasurement> measurements = [];
+  
+  // Statistiques
+  double maxPower = 0.0;
+  double avgPower = 0.0;
+  double maxVoltage = 0.0;
+  double maxCurrent = 0.0;
+
+  late AnimationController _animationController;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _animation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
+    _checkInitialState();
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkInitialState() async {
+    await _getBatteryStats();
+  }
+
+  Future<void> _getBatteryStats() async {
+    try {
+      final Map<dynamic, dynamic>? result =
+          await _channel.invokeMethod('getBatteryStats');
+      if (result != null) {
+        setState(() {
+          voltage = (result['voltage'] ?? 0).toDouble();
+          current = (result['current'] ?? 0).toDouble();
+          power = (result['power'] ?? 0).toDouble();
+          isCharging = (result['isCharging'] ?? false);
+          
+          if (isCharging && isMonitoring) {
+            _addMeasurement();
+            _updateStatistics();
+          }
+        });
+      }
+    } on PlatformException catch (e) {
+      debugPrint('Erreur récupération batterie : ${e.message}');
+    }
+  }
+
+  void _addMeasurement() {
+    measurements.add(PowerMeasurement(
+      voltage: voltage,
+      current: current,
+      power: power,
+      timestamp: DateTime.now(),
+    ));
+    
+    // Garder seulement les 100 dernières mesures
+    if (measurements.length > 100) {
+      measurements.removeAt(0);
+    }
+  }
+
+  void _updateStatistics() {
+    if (measurements.isEmpty) return;
+    
+    maxPower = measurements.map((m) => m.power).reduce(max);
+    maxVoltage = measurements.map((m) => m.voltage).reduce(max);
+    maxCurrent = measurements.map((m) => m.current).reduce(max);
+    avgPower = measurements.map((m) => m.power).reduce((a, b) => a + b) / measurements.length;
+  }
+
+  void _startMonitoring() {
+    if (isMonitoring) return;
+    
+    setState(() {
+      isMonitoring = true;
+      measurements.clear();
+      maxPower = 0.0;
+      avgPower = 0.0;
+      maxVoltage = 0.0;
+      maxCurrent = 0.0;
+    });
+    
+    _animationController.forward();
+    
+    timer = Timer.periodic(const Duration(milliseconds: 500), (timer) async {
+      await _getBatteryStats();
+      if (!isCharging) {
+        _stopMonitoring();
+      }
+    });
+  }
+
+  void _stopMonitoring() {
+    setState(() {
+      isMonitoring = false;
+    });
+    
+    _animationController.reverse();
+    timer?.cancel();
+  }
+
+  void _resetMeasurements() {
+    setState(() {
+      measurements.clear();
+      maxPower = 0.0;
+      avgPower = 0.0;
+      maxVoltage = 0.0;
+      maxCurrent = 0.0;
+    });
+  }
+
+  Color _getPowerColor(double power) {
+    if (power < 5) return const Color(0xFFFF3B30);
+    if (power < 10) return const Color(0xFFFF9500);
+    if (power < 15) return const Color(0xFFFFCC00);
+    if (power < 20) return const Color(0xFF34C759);
+    return const Color(0xFF007AFF);
+  }
+
+  String _getChargingQuality(double power) {
+    if (power < 5) return 'Très lent';
+    if (power < 10) return 'Lent';
+    if (power < 15) return 'Normal';
+    if (power < 20) return 'Rapide';
+    return 'Ultra rapide';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color backgroundColor = isDark ? const Color(0xFF000000) : const Color(0xFFF2F2F7);
+    final Color cardColor = isDark ? const Color(0xFF1C1C1E) : Colors.white;
+    final Color textColor = isDark ? Colors.white : Colors.black;
+
+    return Scaffold(
+      backgroundColor: backgroundColor,
+      appBar: AppBar(
+        title: const Text(
+          'Volta Power Test',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        foregroundColor: textColor,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _resetMeasurements,
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Status Card
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: cardColor,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isCharging 
+                              ? const Color(0xFF34C759).withOpacity(0.1)
+                              : const Color(0xFFFF3B30).withOpacity(0.1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            isCharging ? Icons.power : Icons.power_off,
+                            color: isCharging ? const Color(0xFF34C759) : const Color(0xFFFF3B30),
+                            size: 28,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isCharging ? 'En charge' : 'Non branché',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: textColor,
+                              ),
+                            ),
+                            Text(
+                              isCharging ? 'Analyse en cours' : 'Branchez un chargeur',
+                              style: TextStyle(
+                                color: textColor.withOpacity(0.6),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    if (isCharging) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: _getPowerColor(power).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          _getChargingQuality(power),
+                          style: TextStyle(
+                            color: _getPowerColor(power),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 24),
+              
+              // Gauges Section
+              if (isCharging) ...[
+                Text(
+                  'Mesures en temps réel',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                
+                // Voltage Gauge
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: cardColor,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Tension',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: textColor,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        height: 180,
+                        child: SfRadialGauge(
+                          axes: <RadialAxis>[
+                            RadialAxis(
+                              minimum: 0,
+                              maximum: 12,
+                              showAxisLine: false,
+                              showLabels: false,
+                              showTicks: false,
+                              ranges: <GaugeRange>[
+                                GaugeRange(
+                                  startValue: 0,
+                                  endValue: voltage,
+                                  color: const Color(0xFF007AFF),
+                                  startWidth: 12,
+                                  endWidth: 12,
+                                ),
+                                GaugeRange(
+                                  startValue: voltage,
+                                  endValue: 12,
+                                  color: const Color(0xFFE5E5EA),
+                                  startWidth: 12,
+                                  endWidth: 12,
+                                ),
+                              ],
+                              pointers: <GaugePointer>[
+                                MarkerPointer(
+                                  value: voltage,
+                                  markerHeight: 20,
+                                  markerWidth: 20,
+                                  markerType: MarkerType.circle,
+                                  color: const Color(0xFF007AFF),
+                                ),
+                              ],
+                              annotations: <GaugeAnnotation>[
+                                GaugeAnnotation(
+                                  widget: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '${voltage.toStringAsFixed(2)}V',
+                                        style: TextStyle(
+                                          fontSize: 24,
+                                          fontWeight: FontWeight.bold,
+                                          color: textColor,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Volts',
+                                        style: TextStyle(
+                                          color: textColor.withOpacity(0.6),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  angle: 90,
+                                  positionFactor: 0.5,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+                
+                // Current and Power Row
+                Row(
+                  children: [
+                    // Current Gauge
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: cardColor,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          children: [
+                            Text(
+                              'Courant',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: textColor,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              height: 120,
+                              child: SfRadialGauge(
+                                axes: <RadialAxis>[
+                                  RadialAxis(
+                                    minimum: 0,
+                                    maximum: 3,
+                                    showAxisLine: false,
+                                    showLabels: false,
+                                    showTicks: false,
+                                    ranges: <GaugeRange>[
+                                      GaugeRange(
+                                        startValue: 0,
+                                        endValue: current,
+                                        color: const Color(0xFF34C759),
+                                        startWidth: 8,
+                                        endWidth: 8,
+                                      ),
+                                      GaugeRange(
+                                        startValue: current,
+                                        endValue: 3,
+                                        color: const Color(0xFFE5E5EA),
+                                        startWidth: 8,
+                                        endWidth: 8,
+                                      ),
+                                    ],
+                                    pointers: <GaugePointer>[
+                                      MarkerPointer(
+                                        value: current,
+                                        markerHeight: 16,
+                                        markerWidth: 16,
+                                        markerType: MarkerType.circle,
+                                        color: const Color(0xFF34C759),
+                                      ),
+                                    ],
+                                    annotations: <GaugeAnnotation>[
+                                      GaugeAnnotation(
+                                        widget: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              '${current.toStringAsFixed(2)}A',
+                                              style: TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                                color: textColor,
+                                              ),
+                                            ),
+                                            Text(
+                                              'Ampères',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: textColor.withOpacity(0.6),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        angle: 90,
+                                        positionFactor: 0.5,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    
+                    const SizedBox(width: 16),
+                    
+                    // Power Gauge
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: cardColor,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          children: [
+                            Text(
+                              'Puissance',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: textColor,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              height: 120,
+                              child: SfRadialGauge(
+                                axes: <RadialAxis>[
+                                  RadialAxis(
+                                    minimum: 0,
+                                    maximum: 25,
+                                    showAxisLine: false,
+                                    showLabels: false,
+                                    showTicks: false,
+                                    ranges: <GaugeRange>[
+                                      GaugeRange(
+                                        startValue: 0,
+                                        endValue: power,
+                                        color: _getPowerColor(power),
+                                        startWidth: 8,
+                                        endWidth: 8,
+                                      ),
+                                      GaugeRange(
+                                        startValue: power,
+                                        endValue: 25,
+                                        color: const Color(0xFFE5E5EA),
+                                        startWidth: 8,
+                                        endWidth: 8,
+                                      ),
+                                    ],
+                                    pointers: <GaugePointer>[
+                                      MarkerPointer(
+                                        value: power,
+                                        markerHeight: 16,
+                                        markerWidth: 16,
+                                        markerType: MarkerType.circle,
+                                        color: _getPowerColor(power),
+                                      ),
+                                    ],
+                                    annotations: <GaugeAnnotation>[
+                                      GaugeAnnotation(
+                                        widget: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              '${power.toStringAsFixed(1)}W',
+                                              style: TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                                color: textColor,
+                                              ),
+                                            ),
+                                            Text(
+                                              'Watts',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: textColor.withOpacity(0.6),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        angle: 90,
+                                        positionFactor: 0.5,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                
+                const SizedBox(height: 24),
+                
+                // Statistics
+                if (measurements.isNotEmpty) ...[
+                  Text(
+                    'Statistiques',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: textColor,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        GridView.count(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisCount: 2,
+                          childAspectRatio: 1.8,
+                          mainAxisSpacing: 12,
+                          crossAxisSpacing: 12,
+                          children: [
+                            _buildStatItem('Puissance Max', '${maxPower.toStringAsFixed(1)}W', Icons.offline_bolt, const Color(0xFFFF9500)),
+                            _buildStatItem('Puissance Moy', '${avgPower.toStringAsFixed(1)}W', Icons.show_chart, const Color(0xFF34C759)),
+                            _buildStatItem('Tension Max', '${maxVoltage.toStringAsFixed(1)}V', Icons.flash_on, const Color(0xFF007AFF)),
+                            _buildStatItem('Courant Max', '${maxCurrent.toStringAsFixed(1)}A', Icons.electric_bolt, const Color(0xFFFF3B30)),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            '${measurements.length} mesures collectées',
+                            style: TextStyle(
+                              color: textColor.withOpacity(0.6),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+              
+              const Spacer(),
+              
+              // Control Buttons
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: isCharging && !isMonitoring ? _startMonitoring : null,
+                      icon: const Icon(Icons.play_arrow, size: 20),
+                      label: const Text('Démarrer'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF34C759),
+                        side: const BorderSide(color: Color(0xFF34C759)),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: isMonitoring ? _stopMonitoring : null,
+                      icon: const Icon(Icons.stop, size: 20),
+                      label: const Text('Arrêter'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFFF3B30),
+                        side: const BorderSide(color: Color(0xFFFF3B30)),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : Colors.black;
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: textColor,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: textColor.withOpacity(0.6),
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}

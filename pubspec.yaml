@@ -31,11 +31,20 @@ dependencies:
   
   # Utils
   intl: ^0.19.0
+  equatable: ^2.0.7
+  dartz: ^0.10.1
+  get_it: ^8.2.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/logo.png"
 
 flutter:
   uses-material-design: true
@@ -43,11 +52,11 @@ flutter:
   assets:
     - assets/images/
     - assets/icons/
+    - assets/gif/logo.gif
   
   # # Fonts (optionnel)
-  # fonts:
-  #   - family: Roboto
-  #     fonts:
-  #       - asset: fonts/Roboto-Regular.ttf
-  #       - asset: fonts/Roboto-Bold.ttf
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/font/Poppins-Regular.ttf
   #         weight: 700
